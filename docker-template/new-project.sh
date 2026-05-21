@@ -136,6 +136,7 @@ cp -r "$TEMPLATE_DIR" "$PROJECT_DIR"
 rm -f "$PROJECT_DIR/src/.gitkeep"
 rm -f "$PROJECT_DIR/new-project.sh"
 rm -f "$PROJECT_DIR/README.md"
+rm -f "$PROJECT_DIR/LOGS.md"
 success "Template disalin."
 
 # ─── 2. Buat file .env ────────────────────────────────────────────────────────
@@ -161,10 +162,12 @@ EOF
 
 success "File .env dibuat."
 
-# ─── 3. Buat Makefile ─────────────────────────────────────────────────────────
+# ─── 3. Buat Makefile (sesuai mode) ──────────────────────────────────────────
 step "Membuat Makefile..."
+
+if [[ "$MODE" == "laravel" ]]; then
 cat > "$PROJECT_DIR/Makefile" <<MAKEFILE
-.PHONY: up down start stop restart build logs bash artisan migrate fresh tinker destroy
+.PHONY: up down start stop restart build logs bash artisan migrate fresh tinker info destroy
 
 up:
 	docker compose up -d --build
@@ -202,6 +205,9 @@ fresh:
 tinker:
 	docker compose exec app php artisan tinker
 
+info:
+	@cat PROJECT.md
+
 destroy:
 	@echo "Menghapus container, volume, image, dan seluruh folder project..."
 	docker compose down -v --remove-orphans 2>/dev/null || true
@@ -209,6 +215,52 @@ destroy:
 	sudo rm -rf \$(shell pwd)
 	@echo "Project dihapus."
 MAKEFILE
+else
+# Makefile khusus PHP Native — tanpa perintah Laravel
+cat > "$PROJECT_DIR/Makefile" <<MAKEFILE
+.PHONY: up down start stop restart build logs bash db info destroy
+
+up:
+	docker compose up -d --build
+
+down:
+	docker compose down
+
+start:
+	docker compose start
+
+stop:
+	docker compose stop
+
+restart:
+	docker compose restart
+
+build:
+	docker compose up -d --build --no-cache
+
+logs:
+	docker compose logs -f
+
+bash:
+	docker compose exec app bash
+
+db:
+	docker compose exec db mariadb -u \${DB_USER} -p\${DB_PASS} \${DB_NAME}
+
+sql:
+	docker compose exec -T db mariadb -u \${DB_USER} -p\${DB_PASS} \${DB_NAME} < \$(file)
+
+info:
+	@cat PROJECT.md
+
+destroy:
+	@echo "Menghapus container, volume, image, dan seluruh folder project..."
+	docker compose down -v --remove-orphans 2>/dev/null || true
+	docker image rm \$(shell basename \$(shell pwd))-app 2>/dev/null || true
+	sudo rm -rf \$(shell pwd)
+	@echo "Project dihapus."
+MAKEFILE
+fi
 success "Makefile dibuat."
 
 # ─── 4. Build & jalankan container ───────────────────────────────────────────
@@ -272,44 +324,168 @@ LARAVELENV
   success "Laravel berhasil diinstall dan dikonfigurasi."
 
 else
-  step "Membuat file index.php untuk PHP Native..."
-  mkdir -p "$PROJECT_DIR/src/public"
+  step "Menyiapkan struktur folder PHP Native..."
+
+  # Struktur: public/ (browser), includes/ (class/helper), sql/ (DDL)
+  mkdir -p "$PROJECT_DIR/src/public/assets"
+  mkdir -p "$PROJECT_DIR/src/includes"
+  mkdir -p "$PROJECT_DIR/src/sql"
+
+  # ── src/includes/db.php ──────────────────────────────────────
+  # Starter koneksi MySQLi — baca dari env Docker (DB_HOST, DB_DATABASE, dll)
+  # Env var names sesuai docker-compose.yml (DB_DATABASE / DB_USERNAME / DB_PASSWORD)
+  cat > "$PROJECT_DIR/src/includes/db.php" <<'PHPEOF'
+<?php
+/**
+ * File    : includes/db.php
+ * Fungsi  : Koneksi ke database menggunakan MySQLi OOP
+ *
+ * File ini berada di luar public/ → TIDAK bisa diakses browser langsung.
+ * Gunakan: require_once __DIR__ . '/../includes/db.php';
+ */
+
+$host   = getenv('DB_HOST')     ?: 'db';
+$dbname = getenv('DB_DATABASE') ?: 'mydb';
+$user   = getenv('DB_USERNAME') ?: 'root';
+$pass   = getenv('DB_PASSWORD') ?: '';
+
+$conn = new mysqli($host, $user, $pass, $dbname);
+
+if ($conn->connect_error) {
+    die('Koneksi database gagal: ' . htmlspecialchars($conn->connect_error));
+}
+
+$conn->set_charset('utf8mb4');
+PHPEOF
+
+  # ── src/sql/init.sql ─────────────────────────────────────────
+  cat > "$PROJECT_DIR/src/sql/init.sql" <<SQLEOF
+-- File    : sql/init.sql
+-- Fungsi  : DDL awal project — edit sesuai kebutuhan
+-- Cara import: make sql file=src/sql/init.sql
+
+-- Contoh tabel
+CREATE TABLE IF NOT EXISTS contoh (
+    id         INT          NOT NULL AUTO_INCREMENT,
+    nama       VARCHAR(100) NOT NULL,
+    created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+SQLEOF
+
+  # ── src/public/index.php ─────────────────────────────────────
   cat > "$PROJECT_DIR/src/public/index.php" <<'PHPEOF'
 <?php
-$host = 'db';
-$db   = $_ENV['DB_DATABASE'] ?? getenv('DB_NAME') ?: 'mydb';
-$user = $_ENV['DB_USERNAME'] ?? getenv('DB_USER') ?: 'root';
-$pass = $_ENV['DB_PASSWORD'] ?? getenv('DB_PASS') ?: '';
+/**
+ * File    : public/index.php
+ * Fungsi  : Halaman utama — edit sesuai kebutuhan
+ *
+ * File class/helper taruh di src/includes/ (tidak bisa diakses browser).
+ * Require dari sini dengan path: __DIR__ . '/../includes/db.php'
+ */
 
-try {
-    $pdo = new PDO("mysql:host=$host;dbname=$db", $user, $pass);
-    $status = '<span style="color:green">✔ Terhubung ke database!</span>';
-} catch (PDOException $e) {
-    $status = '<span style="color:red">✘ Gagal koneksi: ' . $e->getMessage() . '</span>';
-}
+require_once __DIR__ . '/../includes/db.php';
+
+// Test koneksi
+$test = $conn->query('SELECT 1');
+$status = $test
+    ? '<span style="color:green;font-weight:bold">✔ Terhubung ke database!</span>'
+    : '<span style="color:red;font-weight:bold">✘ Query gagal</span>';
 ?>
 <!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PHP Native — Docker</title>
   <style>
-    body { font-family: sans-serif; max-width: 600px; margin: 80px auto; }
-    h1   { color: #4F46E5; }
+    * { box-sizing: border-box; }
+    body { font-family: sans-serif; background: #f0f2f5; margin: 0; padding: 40px 20px; }
+    .card { background: #fff; border-radius: 12px; padding: 32px 40px;
+            max-width: 560px; margin: 0 auto; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+    h1 { margin-top: 0; color: #4F46E5; }
+    code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: .9em; }
+    .info { margin-top: 24px; padding: 16px; background: #f9fafb;
+            border-left: 4px solid #4F46E5; border-radius: 4px; }
   </style>
 </head>
 <body>
-  <h1>🐘 PHP Native + Docker</h1>
-  <p>PHP versi: <strong><?= PHP_VERSION ?></strong></p>
-  <p>Database: <?= $status ?></p>
-  <p>Edit file di <code>src/public/index.php</code> untuk mulai coding.</p>
+  <div class="card">
+    <h1>🐘 PHP Native + Docker</h1>
+    <p><strong>PHP versi :</strong> <?= PHP_VERSION ?></p>
+    <p><strong>Database  :</strong> <?= $status ?></p>
+    <div class="info">
+      <strong>Struktur folder:</strong><br><br>
+      <code>src/public/</code> → file yang bisa diakses browser<br>
+      <code>src/includes/</code> → class, helper, koneksi DB (aman dari browser)<br>
+      <code>src/sql/</code> → file SQL untuk import skema<br><br>
+      <strong>Require dari public/:</strong><br>
+      <code>require_once __DIR__ . '/../includes/db.php';</code>
+    </div>
+  </div>
 </body>
 </html>
 PHPEOF
-  success "File index.php dibuat."
+
+  success "Struktur folder PHP Native siap (public/, includes/, sql/)."
 fi
 
 # ─── 7. Ringkasan akhir ───────────────────────────────────────────────────────
+
+# Generate PROJECT.md (tanpa ANSI color, bisa dibaca kapan saja)
+if [[ "$MODE" == "php" ]]; then
+  EXTRA_COMMANDS="  make db          # masuk ke MySQL CLI
+  make sql file=src/sql/init.sql  # import file SQL"
+  EXTRA_INFO="
+## Struktur Folder PHP Native
+
+  src/public/    → file yang diakses browser (.php, .css, .js)
+  src/includes/  → class, helper, koneksi DB (aman dari browser)
+  src/sql/       → file SQL untuk skema database
+
+Require koneksi dari public/:
+  require_once __DIR__ . '/../includes/db.php';"
+else
+  EXTRA_COMMANDS="  make migrate     # jalankan migrasi
+  make fresh       # migrate:fresh --seed
+  make tinker      # buka tinker
+  make artisan cmd=\"route:list\"  # artisan command bebas"
+  EXTRA_INFO=""
+fi
+
+cat > "$PROJECT_DIR/PROJECT.md" <<INFO
+# Project: $PROJECT_NAME
+
+Dibuat   : $(date '+%Y-%m-%d %H:%M')
+Mode     : $MODE
+Lokasi   : $PROJECT_DIR
+
+## Akses Browser
+
+  Website    : http://localhost:${APP_PORT}
+  phpMyAdmin : http://localhost:${PMA_PORT}
+
+## Login phpMyAdmin
+
+  Server   : db
+  Username : root
+  Password : ${DB_ROOT_PASS}
+
+## Perintah Berguna
+
+  cd $PROJECT_DIR
+  make up          # build & jalankan container
+  make down        # matikan & hapus container
+  make start       # start container (tanpa build ulang)
+  make stop        # stop container
+  make logs        # lihat log real-time
+  make bash        # masuk ke container PHP
+${EXTRA_COMMANDS}
+  make info        # tampilkan info project ini
+  make destroy     # hapus container + volume + folder project
+${EXTRA_INFO}
+INFO
+
 echo ""
 echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════╗${NC}"
 echo -e "${BOLD}${GREEN}║           Project Siap Digunakan!            ║${NC}"
@@ -336,9 +512,28 @@ echo -e "  make start       # start container (tanpa build ulang)"
 echo -e "  make stop        # stop container"
 echo -e "  make logs        # lihat log real-time"
 echo -e "  make bash        # masuk ke container PHP"
+if [[ "$MODE" == "laravel" ]]; then
 echo -e "  make migrate     # jalankan migrasi"
 echo -e "  make fresh       # migrate:fresh --seed"
 echo -e "  make tinker      # buka tinker"
 echo -e "  make artisan cmd=\"route:list\"  # artisan command bebas"
+else
+echo -e "  make db          # masuk ke MySQL CLI"
+echo -e "  make sql file=src/sql/init.sql  # import file SQL"
+fi
+echo -e "  make info        # tampilkan info project ini lagi"
 echo -e "  make destroy     # hapus container + volume + folder project"
+echo ""
+if [[ "$MODE" == "php" ]]; then
+echo -e "  ${BOLD}${CYAN}Struktur folder PHP Native:${NC}"
+echo -e "  src/public/    → file yang diakses browser (.php, .css, .js)"
+echo -e "  src/includes/  → class, helper, koneksi DB (aman dari browser)"
+echo -e "  src/sql/       → file SQL untuk skema database"
+echo -e ""
+echo -e "  ${BOLD}${CYAN}Require koneksi dari public/:${NC}"
+echo -e "  require_once __DIR__ . '/../includes/db.php';"
+echo ""
+fi
+echo -e "  ${BOLD}${CYAN}Info tersimpan di:${NC} $PROJECT_DIR/PROJECT.md"
+echo -e "  Atau jalankan: ${BOLD}make info${NC} dari folder project"
 echo ""
