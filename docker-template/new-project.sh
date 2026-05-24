@@ -67,13 +67,33 @@ if [[ -n "$CUSTOM_OUTPUT" ]]; then
   PARENT_OF_CUSTOM="$(dirname "$CUSTOM_OUTPUT")"
   if [[ -d "$PARENT_OF_CUSTOM" && -w "$PARENT_OF_CUSTOM" ]]; then
     PROJECT_DIR="$CUSTOM_OUTPUT"
-    info "Output direktori kustom: $PROJECT_DIR"
   else
     warn "Path '$CUSTOM_OUTPUT' tidak valid atau tidak bisa ditulis. Menggunakan default: $PROJECT_DIR"
   fi
+else
+  # ─── Prompt interaktif lokasi tujuan ────────────────────────────────────────
+  while true; do
+    echo -e "${CYAN}Simpan project di folder${NC} [${BOLD}$PROJECTS_DIR${NC}]: \c"
+    read -r INPUT_OUTPUT
+    if [[ -z "$INPUT_OUTPUT" ]]; then
+      TARGET_PARENT="$PROJECTS_DIR"
+    else
+      TARGET_PARENT="$(realpath -m "$INPUT_OUTPUT")"
+    fi
+    if [[ ! -d "$TARGET_PARENT" || ! -w "$TARGET_PARENT" ]]; then
+      warn "Folder '$TARGET_PARENT' tidak ditemukan atau tidak bisa ditulis. Coba lagi."
+      continue
+    fi
+    PROJECT_DIR="$TARGET_PARENT/$PROJECT_NAME"
+    if [[ -d "$PROJECT_DIR" ]]; then
+      warn "Folder '$PROJECT_DIR' sudah ada. Masukkan lokasi lain."
+      continue
+    fi
+    break
+  done
 fi
 
-if [[ -d "$PROJECT_DIR" ]]; then
+if [[ -n "$CUSTOM_OUTPUT" && -d "$PROJECT_DIR" ]]; then
   error "Folder '$PROJECT_DIR' sudah ada. Pilih nama lain atau hapus folder tersebut."
 fi
 
