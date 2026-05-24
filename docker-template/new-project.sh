@@ -3,9 +3,10 @@
 #  new-project.sh — Buat project PHP/Laravel baru dari template Docker
 #
 #  Cara pakai:
-#    ./new-project.sh nama-project          → Laravel (default)
-#    ./new-project.sh nama-project --php    → PHP Native (tanpa install Laravel)
-#    ./new-project.sh nama-project --port 9090  → tentukan port manual
+#    ./new-project.sh nama-project                          → Laravel (default)
+#    ./new-project.sh nama-project --php                    → PHP Native (tanpa install Laravel)
+#    ./new-project.sh nama-project --port 9090              → tentukan port manual
+#    ./new-project.sh nama-project --output /path/ke/tujuan → simpan project ke lokasi kustom
 # =============================================================================
 
 set -euo pipefail
@@ -29,21 +30,24 @@ step()    { echo -e "\n${BOLD}${CYAN}▶ $*${NC}"; }
 # ─── Validasi argumen ─────────────────────────────────────────────────────────
 if [[ $# -lt 1 ]]; then
   echo -e "${BOLD}Cara pakai:${NC}"
-  echo "  $0 nama-project              → buat project Laravel"
-  echo "  $0 nama-project --php        → buat project PHP Native"
-  echo "  $0 nama-project --port 9090  → tentukan port awal manual"
+  echo "  $0 nama-project                          → buat project Laravel"
+  echo "  $0 nama-project --php                    → buat project PHP Native"
+  echo "  $0 nama-project --port 9090              → tentukan port awal manual"
+  echo "  $0 nama-project --output /path/ke/folder → simpan project ke lokasi kustom"
   exit 1
 fi
 
 PROJECT_NAME="$1"
 MODE="laravel"
 CUSTOM_PORT=""
+CUSTOM_OUTPUT=""
 
 shift
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --php)    MODE="php"; shift ;;
     --port)   CUSTOM_PORT="$2"; shift 2 ;;
+    --output) CUSTOM_OUTPUT="$2"; shift 2 ;;
     *)        error "Argumen tidak dikenal: $1" ;;
   esac
 done
@@ -57,6 +61,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DIR="$SCRIPT_DIR"
 PROJECTS_DIR="$(dirname "$SCRIPT_DIR")"
 PROJECT_DIR="$PROJECTS_DIR/$PROJECT_NAME"
+
+if [[ -n "$CUSTOM_OUTPUT" ]]; then
+  CUSTOM_OUTPUT="$(realpath -m "$CUSTOM_OUTPUT")"
+  PARENT_OF_CUSTOM="$(dirname "$CUSTOM_OUTPUT")"
+  if [[ -d "$PARENT_OF_CUSTOM" && -w "$PARENT_OF_CUSTOM" ]]; then
+    PROJECT_DIR="$CUSTOM_OUTPUT"
+    info "Output direktori kustom: $PROJECT_DIR"
+  else
+    warn "Path '$CUSTOM_OUTPUT' tidak valid atau tidak bisa ditulis. Menggunakan default: $PROJECT_DIR"
+  fi
+fi
 
 if [[ -d "$PROJECT_DIR" ]]; then
   error "Folder '$PROJECT_DIR' sudah ada. Pilih nama lain atau hapus folder tersebut."
