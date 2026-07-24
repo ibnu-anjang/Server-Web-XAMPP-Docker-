@@ -30,7 +30,9 @@ step()    { echo -e "\n${BOLD}${CYAN}▶ $*${NC}"; }
 # ─── Validasi argumen ─────────────────────────────────────────────────────────
 if [[ $# -lt 1 ]]; then
   echo -e "${BOLD}Cara pakai:${NC}"
-  echo "  $0 nama-project                          → buat project Laravel"
+  echo "  $0 nama-project                          → buat project Laravel (default Laravel 13)"
+  echo "  $0 nama-project --laravel 12             → buat project Laravel 12"
+  echo "  $0 nama-project --laravel 13             → buat project Laravel 13"
   echo "  $0 nama-project --php                    → buat project PHP Native"
   echo "  $0 nama-project --port 9090              → tentukan port awal manual"
   echo "  $0 nama-project --output /path/ke/folder → simpan project ke lokasi kustom"
@@ -39,6 +41,8 @@ fi
 
 PROJECT_NAME="$1"
 MODE="laravel"
+LARAVEL_VERSION="13"
+LARAVEL_VERSION_EXPLICIT="false"
 CUSTOM_PORT=""
 CUSTOM_OUTPUT=""
 
@@ -46,6 +50,11 @@ shift
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --php)    MODE="php"; shift ;;
+    --laravel|--lv)
+      LARAVEL_VERSION="$2"
+      LARAVEL_VERSION_EXPLICIT="true"
+      shift 2
+      ;;
     --port)   CUSTOM_PORT="$2"; shift 2 ;;
     --output) CUSTOM_OUTPUT="$2"; shift 2 ;;
     *)        error "Argumen tidak dikenal: $1" ;;
@@ -97,6 +106,42 @@ if [[ -n "$CUSTOM_OUTPUT" && -d "$PROJECT_DIR" ]]; then
   error "Folder '$PROJECT_DIR' sudah ada. Pilih nama lain atau hapus folder tersebut."
 fi
 
+# ─── Prompt interaktif versi Laravel ─────────────────────────────────────────
+if [[ "$MODE" == "laravel" && "$LARAVEL_VERSION_EXPLICIT" == "false" ]]; then
+  while true; do
+    echo -e "${CYAN}Pilih versi Laravel${NC} [${BOLD}13${NC}]:"
+    echo "  1) Laravel 13 (Terbaru)"
+    echo "  2) Laravel 12"
+    echo "  3) Ketik versi kustom (misal: 11, 10, dll.)"
+    echo -e "${CYAN}Pilihan Anda (1/2/3/atau tekan Enter untuk default 13)${NC}: \c"
+    read -r PILIHAN_LV
+    if [[ -z "$PILIHAN_LV" || "$PILIHAN_LV" == "1" ]]; then
+      LARAVEL_VERSION="13"
+      break
+    elif [[ "$PILIHAN_LV" == "2" ]]; then
+      LARAVEL_VERSION="12"
+      break
+    elif [[ "$PILIHAN_LV" == "3" ]]; then
+      echo -e "${CYAN}Masukkan versi kustom yang diinginkan (misal: 11, 10)${NC}: \c"
+      read -r CUSTOM_LV
+      if [[ -n "$CUSTOM_LV" ]]; then
+        LARAVEL_VERSION="$CUSTOM_LV"
+        break
+      else
+        warn "Versi kustom tidak boleh kosong. Silakan coba lagi."
+      fi
+    else
+      # Jika user langsung ketik versinya sendiri tanpa pilih menu (misal ketik "12" atau "11")
+      if [[ "$PILIHAN_LV" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+        LARAVEL_VERSION="$PILIHAN_LV"
+        break
+      else
+        warn "Pilihan tidak valid. Silakan pilih 1, 2, 3, atau langsung ketik nomor versi."
+      fi
+    fi
+  done
+fi
+
 # ─── Rollback otomatis kalau script gagal ─────────────────────────────────────
 cleanup() {
   if [[ $? -ne 0 ]]; then
@@ -146,7 +191,11 @@ echo -e "${BOLD}║        Docker PHP Project Generator          ║${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════════╝${NC}"
 echo ""
 info "Nama project : ${BOLD}$PROJECT_NAME${NC}"
-info "Mode         : ${BOLD}$MODE${NC}"
+if [[ "$MODE" == "laravel" ]]; then
+  info "Mode         : ${BOLD}$MODE (v$LARAVEL_VERSION)${NC}"
+else
+  info "Mode         : ${BOLD}$MODE${NC}"
+fi
 info "Lokasi       : ${BOLD}$PROJECT_DIR${NC}"
 info "APP_PORT     : ${BOLD}$APP_PORT${NC}  → http://localhost:$APP_PORT"
 info "PMA_PORT     : ${BOLD}$PMA_PORT${NC}  → http://localhost:$PMA_PORT"
@@ -172,6 +221,9 @@ rm -f "$PROJECT_DIR/src/.gitkeep"
 rm -f "$PROJECT_DIR/new-project.sh"
 rm -f "$PROJECT_DIR/README.md"
 rm -f "$PROJECT_DIR/LOGS.md"
+if [[ "$MODE" == "laravel" ]]; then
+  rm -f "$PROJECT_DIR/GUIDE-PHP-NATIVE.md"
+fi
 success "Template disalin."
 
 # ─── 2. Buat file .env ────────────────────────────────────────────────────────
@@ -323,8 +375,15 @@ success "Database siap."
 
 # ─── 6. Setup project ─────────────────────────────────────────────────────────
 if [[ "$MODE" == "laravel" ]]; then
-  step "Menginstall Laravel via Composer..."
-  docker compose exec app composer create-project laravel/laravel . --prefer-dist
+  # Tentukan version constraint untuk composer
+  if [[ "$LARAVEL_VERSION" =~ ^[0-9]+$ ]]; then
+    LARAVEL_CONSTRAINT="^${LARAVEL_VERSION}.0"
+  else
+    LARAVEL_CONSTRAINT="$LARAVEL_VERSION"
+  fi
+
+  step "Menginstall Laravel v$LARAVEL_VERSION via Composer..."
+  docker compose exec app composer create-project "laravel/laravel:${LARAVEL_CONSTRAINT}" . --prefer-dist
 
   step "Mengkonfigurasi .env Laravel..."
   LARAVEL_ENV="$PROJECT_DIR/src/.env"
@@ -488,11 +547,17 @@ else
   EXTRA_INFO=""
 fi
 
+if [[ "$MODE" == "laravel" ]]; then
+  DISPLAY_MODE="$MODE (v$LARAVEL_VERSION)"
+else
+  DISPLAY_MODE="$MODE"
+fi
+
 cat > "$PROJECT_DIR/PROJECT.md" <<INFO
 # Project: $PROJECT_NAME
 
 Dibuat   : $(date '+%Y-%m-%d %H:%M')
-Mode     : $MODE
+Mode     : $DISPLAY_MODE
 Lokasi   : $PROJECT_DIR
 
 ## Akses Browser
@@ -527,7 +592,11 @@ echo -e "${BOLD}${GREEN}║           Project Siap Digunakan!            ║${NC
 echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  ${BOLD}Nama Project  :${NC} $PROJECT_NAME"
-echo -e "  ${BOLD}Mode          :${NC} $MODE"
+if [[ "$MODE" == "laravel" ]]; then
+  echo -e "  ${BOLD}Mode          :${NC} $MODE (v$LARAVEL_VERSION)"
+else
+  echo -e "  ${BOLD}Mode          :${NC} $MODE"
+fi
 echo -e "  ${BOLD}Lokasi        :${NC} $PROJECT_DIR"
 echo ""
 echo -e "  ${BOLD}${CYAN}Akses Browser:${NC}"
