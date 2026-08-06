@@ -66,7 +66,7 @@ if [[ ! "$PROJECT_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
 fi
 
 # ─── Tentukan lokasi template & project ───────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 TEMPLATE_DIR="$SCRIPT_DIR"
 PROJECTS_DIR="$(dirname "$SCRIPT_DIR")"
 PROJECT_DIR="$PROJECTS_DIR/$PROJECT_NAME"
@@ -254,86 +254,120 @@ step "Membuat Makefile..."
 
 if [[ "$MODE" == "laravel" ]]; then
 cat > "$PROJECT_DIR/Makefile" <<MAKEFILE
-.PHONY: up down start stop restart build logs bash artisan migrate fresh tinker info destroy
+.PHONY: base up down start stop restart build logs bash artisan migrate fresh tinker composer npm setup info destroy
 
-up:
-	docker compose up -d --build
+APP_PORT := \$(shell grep -m1 '^APP_PORT=' .env | cut -d= -f2)
+UID      := \$(shell id -u)
+GID      := \$(shell id -g)
+
+# Eksekusi di container sebagai www-data (uid = uid host) supaya file bikinan
+# artisan/composer tetap bisa diedit di host.
+EXEC := docker compose exec --user www-data -e HOME=/tmp app
+
+# Build base image hanya kalau belum ada (image base dipakai bersama project lain).
+base:
+	@docker image inspect php-laravel-base:latest >/dev/null 2>&1 || docker build -t php-laravel-base:latest -f docker/php/Dockerfile.base .
+
+up: base
+	HOST_UID=\$(UID) HOST_GID=\$(GID) docker compose up -d --build
+
+# Sekali jalan: build + composer install + key + migrate & seed.
+setup: up
+	@echo "==> Tunggu container siap..."
+	@for i in 1 2 3 4 5; do docker compose exec app true 2>/dev/null && break || sleep 2; done
+	@echo "==> Pastikan .env ada"
+	\$(EXEC) sh -c 'test -f .env || cp .env.example .env'
+	@echo "==> Pastikan APP_KEY terisi"
+	\$(EXEC) sh -c 'grep -q "^APP_KEY=base64:" .env || php artisan key:generate --ansi'
+	@echo "==> Composer install"
+	\$(EXEC) composer install --no-interaction --no-progress
+	@echo "==> Migrate & seed"
+	\$(EXEC) php artisan migrate:fresh --seed
+	@echo ""
+	@echo "== Selesai! ================================================"
+	@echo "  Website    : http://localhost:\$(APP_PORT)"
+	@echo "  phpMyAdmin : http://localhost:8081"
+	@echo "============================================================="
 
 down:
 	docker compose down
-
 start:
 	docker compose start
-
 stop:
 	docker compose stop
-
 restart:
 	docker compose restart
 
-build:
-	docker compose up -d --build --no-cache
+build: base
+	HOST_UID=\$(UID) HOST_GID=\$(GID) docker compose build --no-cache && docker compose up -d
 
 logs:
 	docker compose logs -f
-
 bash:
-	docker compose exec app bash
-
+	\$(EXEC) bash
 artisan:
-	docker compose exec app php artisan \$(cmd)
-
+	\$(EXEC) php artisan \$(cmd)
 migrate:
-	docker compose exec app php artisan migrate
-
+	\$(EXEC) php artisan migrate
 fresh:
-	docker compose exec app php artisan migrate:fresh --seed
-
+	\$(EXEC) php artisan migrate:fresh --seed
 tinker:
-	docker compose exec app php artisan tinker
+	\$(EXEC) php artisan tinker
+composer:
+	\$(EXEC) composer \$(cmd)
+npm:
+	\$(EXEC) npm \$(cmd)
 
 info:
 	@cat PROJECT.md
 
 destroy:
-	@echo "Menghapus container, volume, image, dan seluruh folder project..."
+	@echo "Menghapus container, volume, dan image project ini..."
 	docker compose down -v --remove-orphans 2>/dev/null || true
-	docker image rm \$(shell basename \$(shell pwd))-app 2>/dev/null || true
-	sudo rm -rf \$(shell pwd)
-	@echo "Project dihapus."
+	docker image rm \$(shell basename \$(CURDIR))-app:latest 2>/dev/null || true
+	@echo "Menghapus folder project: \$(CURDIR)"
+	sudo rm -rf "\$(CURDIR)"
+	@echo "== Project terhapus bersih ================================="
+	@echo "  Image 'php-laravel-base' dipertahankan agar project docker"
+	@echo "  lain tetap aman. Hapus manual kalau mau benar2 bersih:"
+	@echo "    docker image rm php-laravel-base:latest"
+	@echo "=============================================================="
 MAKEFILE
 else
 # Makefile khusus PHP Native — tanpa perintah Laravel
 cat > "$PROJECT_DIR/Makefile" <<MAKEFILE
-.PHONY: up down start stop restart build logs bash db info destroy
+.PHONY: base up down start stop restart build logs bash db sql info destroy
 
-up:
-	docker compose up -d --build
+APP_PORT := \$(shell grep -m1 '^APP_PORT=' .env | cut -d= -f2)
+UID      := \$(shell id -u)
+GID      := \$(shell id -g)
+
+EXEC := docker compose exec --user www-data -e HOME=/tmp app
+
+base:
+	@docker image inspect php-laravel-base:latest >/dev/null 2>&1 || docker build -t php-laravel-base:latest -f docker/php/Dockerfile.base .
+
+up: base
+	HOST_UID=\$(UID) HOST_GID=\$(GID) docker compose up -d --build
 
 down:
 	docker compose down
-
 start:
 	docker compose start
-
 stop:
 	docker compose stop
-
 restart:
 	docker compose restart
 
-build:
-	docker compose up -d --build --no-cache
+build: base
+	HOST_UID=\$(UID) HOST_GID=\$(GID) docker compose build --no-cache && docker compose up -d
 
 logs:
 	docker compose logs -f
-
 bash:
-	docker compose exec app bash
-
+	\$(EXEC) bash
 db:
 	docker compose exec db mariadb -u \${DB_USER} -p\${DB_PASS} \${DB_NAME}
-
 sql:
 	docker compose exec -T db mariadb -u \${DB_USER} -p\${DB_PASS} \${DB_NAME} < \$(file)
 
@@ -341,11 +375,16 @@ info:
 	@cat PROJECT.md
 
 destroy:
-	@echo "Menghapus container, volume, image, dan seluruh folder project..."
+	@echo "Menghapus container, volume, dan image project ini..."
 	docker compose down -v --remove-orphans 2>/dev/null || true
-	docker image rm \$(shell basename \$(shell pwd))-app 2>/dev/null || true
-	sudo rm -rf \$(shell pwd)
-	@echo "Project dihapus."
+	docker image rm \$(shell basename \$(CURDIR))-app:latest 2>/dev/null || true
+	@echo "Menghapus folder project: \$(CURDIR)"
+	sudo rm -rf "\$(CURDIR)"
+	@echo "== Project terhapus bersih ================================="
+	@echo "  Image 'php-laravel-base' dipertahankan agar project docker"
+	@echo "  lain tetap aman. Hapus manual kalau mau benar2 bersih:"
+	@echo "    docker image rm php-laravel-base:latest"
+	@echo "=============================================================="
 MAKEFILE
 fi
 success "Makefile dibuat."
@@ -355,7 +394,7 @@ step "Build image Docker dan menjalankan container..."
 info  "Ini mungkin membutuhkan 2–5 menit pada build pertama."
 
 cd "$PROJECT_DIR"
-docker compose up -d --build
+HOST_UID="$(id -u)" HOST_GID="$(id -g)" docker compose up -d --build
 
 # ─── 5. Tunggu database siap ──────────────────────────────────────────────────
 step "Menunggu database siap..."
@@ -383,7 +422,7 @@ if [[ "$MODE" == "laravel" ]]; then
   fi
 
   step "Menginstall Laravel v$LARAVEL_VERSION via Composer..."
-  docker compose exec app composer create-project "laravel/laravel:${LARAVEL_CONSTRAINT}" . --prefer-dist
+  docker compose exec --user www-data -e HOME=/tmp app composer create-project "laravel/laravel:${LARAVEL_CONSTRAINT}" . --prefer-dist
 
   step "Mengkonfigurasi .env Laravel..."
   LARAVEL_ENV="$PROJECT_DIR/src/.env"
@@ -405,10 +444,10 @@ DB_PASSWORD=${DB_PASS}
 LARAVELENV
 
   step "Generate APP_KEY..."
-  docker compose exec app php artisan key:generate
+  docker compose exec --user www-data -e HOME=/tmp app php artisan key:generate
 
   step "Menjalankan migrasi database..."
-  docker compose exec app php artisan migrate --force
+  docker compose exec --user www-data -e HOME=/tmp app php artisan migrate --force
 
   step "Memperbaiki permission storage..."
   docker compose exec app bash -c \
