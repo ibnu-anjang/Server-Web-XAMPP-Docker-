@@ -240,6 +240,10 @@ APP_PORT=${APP_PORT}
 PMA_PORT=${PMA_PORT}
 DB_PORT=${DB_PORT}
 
+# UID/GID host agar permission file tidak conflict
+HOST_UID=$(id -u)
+HOST_GID=$(id -g)
+
 # Kredensial database
 DB_ROOT_PASS=${DB_ROOT_PASS}
 DB_NAME=${DB_NAME}

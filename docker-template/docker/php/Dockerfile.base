@@ -3,13 +3,15 @@ FROM php:8.3-apache
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libzip-dev \
         libpng-dev \
-        libjpeg-dev \
+        libjpeg62-turbo-dev \
         libonig-dev \
         libxml2-dev \
+        libgd-dev \
         zip \
         unzip \
         curl \
         git \
+    && docker-php-ext-configure gd --with-jpeg --with-freetype \
     && docker-php-ext-install \
         pdo \
         pdo_mysql \
@@ -21,7 +23,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         bcmath \
         gd \
         xml \
+        intl \
+        opcache \
+    && docker-php-ext-enable opcache \
     && a2enmod rewrite \
     && rm -rf /var/lib/apt/lists/*
+
+# PHP production defaults + dev convenience
+ENV PHP_INI_DIR=/usr/local/etc/php
+COPY docker/php/php.ini-production $PHP_INI_DIR/php.ini
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer

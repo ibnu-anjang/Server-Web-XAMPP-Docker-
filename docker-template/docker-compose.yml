@@ -9,13 +9,9 @@ services:
         HOST_UID: ${HOST_UID:-1000}
         HOST_GID: ${HOST_GID:-1000}
     container_name: ${PROJECT_NAME}_app
+    restart: unless-stopped
     ports:
-      - "${APP_PORT:-8080}:80"
-    volumes:
-      - ./src:/var/www/html   # folder kodingan kamu ↔ container
-    depends_on:
-      db:
-        condition: service_healthy
+      - "127.0.0.1:${APP_PORT:-8080}:80"
     environment:
       DB_CONNECTION: mysql
       DB_HOST: db
@@ -23,37 +19,45 @@ services:
       DB_DATABASE: ${DB_NAME}
       DB_USERNAME: ${DB_USER}
       DB_PASSWORD: ${DB_PASS}
+    volumes:
+      - ./src:/var/www/html
+    depends_on:
+      db:
+        condition: service_healthy
 
-  # ─── MariaDB (lebih ringan dari MySQL, 100% kompatibel) ────────────────────
+  # ─── MariaDB ───────────────────────────────────────────────────────────────
   db:
     image: mariadb:11.4
     container_name: ${PROJECT_NAME}_db
+    restart: unless-stopped
     ports:
-      - "${DB_PORT:-3306}:3306"
+      - "127.0.0.1:${DB_PORT:-3306}:3306"
     environment:
       MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASS}
       MARIADB_DATABASE: ${DB_NAME}
       MARIADB_USER: ${DB_USER}
       MARIADB_PASSWORD: ${DB_PASS}
     volumes:
-      - db_data:/var/lib/mysql   # data DB persisten, tidak hilang saat container mati
+      - db_data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ─── phpMyAdmin ────────────────────────────────────────────────────────────
+  # ─── phpMyAdmin (opsional) ─────────────────────────────────────────────────
   phpmyadmin:
     image: phpmyadmin:5.2-apache
     container_name: ${PROJECT_NAME}_pma
+    profiles: ["pma"]
+    restart: unless-stopped
     ports:
-      - "${PMA_PORT:-8081}:80"
+      - "127.0.0.1:${PMA_PORT:-8081}:80"
     environment:
       PMA_HOST: db
       PMA_PORT: 3306
       PMA_USER: root
-      PMA_PASSWORD: ${DB_ROOT_PASS}   # auto-login, tidak perlu ketik di browser
+      PMA_PASSWORD: ${DB_ROOT_PASS}
     depends_on:
       db:
         condition: service_healthy

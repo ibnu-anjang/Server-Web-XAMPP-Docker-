@@ -1,0 +1,10 @@
+src
+node_modules
+vendor
+.git
+.gitignore
+*.md
+.env
+.env.example
+logs
+*.log
